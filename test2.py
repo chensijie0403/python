@@ -8,38 +8,48 @@ from awsglue.utils import getResolvedOptions
 # ログ設定
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def get_secret(secret_name):
+def get_secret(secret_name, jobnet_id):
     """
     AWS Secrets Manager から Redshift の接続情報を取得する。
     
     引数:
         secret_name (str): AWS Secrets Manager に保存されている Redshift 認証情報のキー名。
+        jobnet_id (str): ジョブネット ID。
     
     戻り値:
         dict: Redshift の接続情報を含む辞書。
     """
-    client = boto3.client('secretsmanager')
-    response = client.get_secret_value(SecretId=secret_name)
-    return json.loads(response['SecretString'])
+    try:
+        client = boto3.client('secretsmanager')
+        response = client.get_secret_value(SecretId=secret_name)
+        return json.loads(response['SecretString'])
+    except Exception as e:
+        logging.error(f"E_DWH_JB_DB_DATA_COPY_004: {jobnet_id} Redshift 接続情報の取得が異常終了。")
+        raise e
 
-def connect_to_redshift(credentials):
+def connect_to_redshift(credentials, jobnet_id):
     """
     redshift_connector を使用して Redshift に接続する。
     
     引数:
         credentials (dict): Redshift の接続認証情報。
+        jobnet_id (str): ジョブネット ID。
     
     戻り値:
         redshift_connector.Connection: Redshift の接続オブジェクト。
     """
-    conn = redshift_connector.connect(
-        database=credentials['dbname'],
-        user=credentials['username'],
-        password=credentials['password'],
-        host=credentials['host'],
-        port=int(credentials['port'])
-    )
-    return conn
+    try:
+        conn = redshift_connector.connect(
+            database=credentials['dbname'],
+            user=credentials['username'],
+            password=credentials['password'],
+            host=credentials['host'],
+            port=int(credentials['port'])
+        )
+        return conn
+    except Exception as e:
+        logging.error(f"E_DWH_JB_DB_DATA_COPY_005: {jobnet_id} Redshift に接続が異常終了。")
+        raise e
 
 def execute_sql(conn, source_schema, source_table, target_schema, target_table, jobnet_id):
     """
@@ -84,9 +94,16 @@ def main():
     logging.info(f"I_DWH_JB_DB_DATA_COPY_001: {jobnet_id} DWH 内データ取り込み処理を開始します。")
     
     try:
-        credentials = get_secret(secret_name)
-        conn = connect_to_redshift(credentials)
+        credentials = get_secret(secret_name, jobnet_id)
+        conn = connect_to_redshift(credentials, jobnet_id)
         execute_sql(conn, source_schema, source_table, target_schema, target_table, jobnet_id)
         logging.info(f"I_DWH_JB_DB_DATA_COPY_003: {jobnet_id} DWH 内データ取り込み処理が正常終了しました。")
     except Exception as e:
-        logging.error(f"E_DWH_JB_DB_DATA_COPY_002: {jobnet_id} 例外発生しました。(登録先スキーマ: {target_schema}; 登録先テーブル: {target_table}; スタックトレース: {str(e)})
+        logging.error(f"E_DWH_JB_DB_DATA_COPY_002: {jobnet_id} 例外発生しました。(登録先スキーマ: {target_schema}; 登録先テーブル: {target_table}; スタックトレース: {str(e)})")
+        sys.exit(1)  # 異常発生時に Glue Job を異常終了させる
+    finally:
+        if conn:
+            conn.close()
+
+if __name__ == "__main__":
+    main()
